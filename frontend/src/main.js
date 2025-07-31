@@ -1,2 +1,0 @@
-#Main JavaScript entry point
-
