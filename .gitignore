@@ -1,0 +1,9 @@
+/.env
+/backend/__pycache__/
+/backend/venv/
+/backend/build/
+/frontend/node_modules/ # If you introduce npm later
+/frontend/dist/         # If you introduce a build step later
+*.log
+*.sqlite
+.pytest_cache/
