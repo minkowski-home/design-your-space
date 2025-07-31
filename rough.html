@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Room Model</title>
+    <!-- Tailwind CSS for basic styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden; /* Hide scrollbars */
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f2f5;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        canvas {
+            display: block;
+            background-color: #e0e0e0;
+            border-radius: 12px;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+        }
+        .controls-container {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            padding: 1rem;
+            background-color: rgba(255, 255, 255, 0.9);
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            flex-wrap: wrap; /* Allow wrapping on smaller screens */
+            justify-content: center;
+        }
+        .btn {
+            background-color: #4f46e5;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease-in-out;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            border: none;
+            outline: none;
+        }
+        .btn:hover {
+            background-color: #4338ca;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+        }
+        .btn:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-size: 1.5rem;
+            z-index: 100;
+            visibility: hidden; /* Hidden by default */
+            opacity: 0;
+            transition: visibility 0s, opacity 0.3s linear;
+        }
+        .loading-overlay.visible {
+            visibility: visible;
+            opacity: 1;
+        }
+        .info-text {
+            font-size: 0.9rem;
+            color: #4b5563;
+            text-align: center;
+            margin-top: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="controls-container">
+        <button id="regenerateFurnitureBtn" class="btn">Regenerate Furniture</button>
+        <span class="text-gray-700 info-text">Left-click furniture to select, then drag to move. Right-click to rotate camera. Scroll to zoom.</span>
+    </div>
+    <div id="loadingOverlay" class="loading-overlay">Loading...</div>
+
+    <!-- Three.js library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script type="module">
+        // Scene, Camera, Renderer setup
+        let scene, camera, renderer;
+        let furnitureGroup; // Group to hold all furniture objects
+        let floorPlane; // Invisible plane for raycasting to detect ground position
+
+        const roomWidth = 10;
+        const roomHeight = 4;
+        const roomDepth = 10;
+
+        const loadingOverlay = document.getElementById('loadingOverlay');
+
+        // Variables for drag and drop (left-click)
+        let raycaster = new THREE.Raycaster();
+        let mouse = new THREE.Vector2();
+        let SELECTED = null; // The currently selected object
+        let isDragging = false; // Flag to indicate if dragging is active
+        let offset = new THREE.Vector3(); // Offset from object origin to click point
+
+        // Variables for camera rotation (right-click)
+        let isRotating = false;
+        let previousMouseX = 0;
+        let previousMouseY = 0;
+        let cameraTarget = new THREE.Vector3(0, roomHeight / 2, 0); // Center of the room for camera to orbit around
+        let cameraRadius; // Distance from camera to target
+        let cameraPhi;    // Polar angle (vertical rotation)
+        let cameraTheta;  // Azimuthal angle (horizontal rotation)
+
+        // Function to show loading overlay
+        function showLoading() {
+            loadingOverlay.classList.add('visible');
+        }
+
+        // Function to hide loading overlay
+        function hideLoading() {
+            loadingOverlay.classList.remove('visible');
+        }
+
+        // Initialize the 3D scene
+        function init() {
+            showLoading();
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xf0f2f5); // Light background
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            // Initial camera position. We'll derive spherical coords from this.
+            camera.position.set(roomWidth / 2, roomHeight / 2, roomDepth * 1.5);
+            camera.lookAt(cameraTarget); // Make camera look at the center of the room
+
+            // Initialize camera spherical coordinates based on its initial position
+            cameraRadius = camera.position.distanceTo(cameraTarget);
+            // Calculate polar angle (phi) from Y-axis
+            cameraPhi = Math.acos((camera.position.y - cameraTarget.y) / cameraRadius);
+            // Calculate azimuthal angle (theta) from XZ plane
+            cameraTheta = Math.atan2(camera.position.x - cameraTarget.x, camera.position.z - cameraTarget.z);
+
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.body.appendChild(renderer.domElement);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0x404040, 2); // Soft white light
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+            directionalLight.position.set(5, 10, 7); // Position light
+            directionalLight.castShadow = true; // Enable shadows
+            scene.add(directionalLight);
+
+            // Create the room
+            createRoom();
+
+            // Create a group for furniture to easily remove/add
+            furnitureGroup = new THREE.Group();
+            scene.add(furnitureGroup);
+
+            // Generate initial furniture
+            generateFurniture();
+
+            // Event listeners for window resize and button
+            window.addEventListener('resize', onWindowResize);
+            document.getElementById('regenerateFurnitureBtn').addEventListener('click', generateFurniture);
+
+            // Event listeners for drag and drop and camera rotation
+            renderer.domElement.addEventListener('mousedown', onMouseDown, false);
+            renderer.domElement.addEventListener('mousemove', onMouseMove, false);
+            renderer.domElement.addEventListener('mouseup', onMouseUp, false);
+            renderer.domElement.addEventListener('wheel', onMouseWheel, false); // For zooming
+            renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefault()); // Prevent right-click context menu
+
+            hideLoading();
+        }
+
+        // Create the room geometry (floor and walls)
+        function createRoom() {
+            // Floor
+            const floorGeometry = new THREE.BoxGeometry(roomWidth, 0.1, roomDepth);
+            const floorMaterial = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.8, metalness: 0.1 });
+            const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+            floor.position.set(0, -0.05, 0); // Position slightly below 0 to act as floor
+            floor.receiveShadow = true;
+            scene.add(floor);
+
+            // Invisible plane for raycasting the floor (for dragging)
+            floorPlane = new THREE.Mesh(
+                new THREE.PlaneGeometry(roomWidth * 2, roomDepth * 2), // Larger than room to catch clicks
+                new THREE.MeshBasicMaterial({ visible: false }) // Invisible material
+            );
+            floorPlane.rotation.x = -Math.PI / 2; // Rotate to be horizontal
+            floorPlane.position.y = 0; // Align with the floor
+            scene.add(floorPlane);
+
+            // Walls (using planes for simplicity, positioned at boundaries)
+            const wallMaterial = new THREE.MeshStandardMaterial({ color: 0xe0e0e0, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide });
+
+            // Back Wall
+            const backWall = new THREE.Mesh(new THREE.PlaneGeometry(roomWidth, roomHeight), wallMaterial);
+            backWall.position.set(0, roomHeight / 2, -roomDepth / 2);
+            backWall.receiveShadow = true;
+            scene.add(backWall);
+
+            // Left Wall
+            const leftWall = new THREE.Mesh(new THREE.PlaneGeometry(roomDepth, roomHeight), wallMaterial);
+            leftWall.position.set(-roomWidth / 2, roomHeight / 2, 0);
+            leftWall.rotation.y = Math.PI / 2; // Rotate to align with XZ plane
+            leftWall.receiveShadow = true;
+            scene.add(leftWall);
+
+            // Right Wall
+            const rightWall = new THREE.Mesh(new THREE.PlaneGeometry(roomDepth, roomHeight), wallMaterial);
+            rightWall.position.set(roomWidth / 2, roomHeight / 2, 0);
+            rightWall.rotation.y = -Math.PI / 2; // Rotate to align with XZ plane
+            rightWall.receiveShadow = true;
+            scene.add(rightWall);
+
+            // Ceiling
+            const ceilingGeometry = new THREE.BoxGeometry(roomWidth, 0.1, roomDepth);
+            const ceilingMaterial = new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.8, metalness: 0.1 });
+            const ceiling = new THREE.Mesh(ceilingGeometry, ceilingMaterial);
+            ceiling.position.set(0, roomHeight + 0.05, 0); // Position slightly above room height
+            ceiling.receiveShadow = true;
+            scene.add(ceiling);
+        }
+
+        // Generate random furniture
+        function generateFurniture() {
+            showLoading();
+
+            // Clear existing furniture
+            while (furnitureGroup.children.length > 0) {
+                const object = furnitureGroup.children[0];
+                // Dispose of geometry and material to free up memory
+                object.geometry.dispose();
+                object.material.dispose();
+                furnitureGroup.remove(object);
+            }
+            // Ensure SELECTED is reset when furniture is regenerated
+            SELECTED = null;
+            isDragging = false;
+            isRotating = false;
+
+            const numFurniture = Math.floor(Math.random() * 8) + 5; // 5 to 12 pieces of furniture
+
+            for (let i = 0; i < numFurniture; i++) {
+                const furnitureType = Math.random();
+                let geometry;
+                let width, height, depth;
+
+                // Randomly choose furniture type and dimensions
+                if (furnitureType < 0.33) { // Cube/Table
+                    width = Math.random() * 1.5 + 0.5;
+                    height = Math.random() * 0.8 + 0.3;
+                    depth = Math.random() * 1.5 + 0.5;
+                    geometry = new THREE.BoxGeometry(width, height, depth);
+                } else if (furnitureType < 0.66) { // Cylinder/Pillar/Stool
+                    const radius = Math.random() * 0.4 + 0.2;
+                    height = Math.random() * 1.2 + 0.5;
+                    geometry = new THREE.CylinderGeometry(radius, radius, height, 32);
+                    width = radius * 2; // For positioning
+                    depth = radius * 2; // For positioning
+                } else { // Sphere/Decoration
+                    const radius = Math.random() * 0.6 + 0.2;
+                    height = radius * 2; // For spheres, height is diameter
+                    geometry = new THREE.SphereGeometry(radius, 32, 32);
+                    width = radius * 2;
+                    depth = radius * 2;
+                }
+
+                // Random color for furniture
+                const color = new THREE.Color(Math.random(), Math.random(), Math.random());
+                const material = new THREE.MeshStandardMaterial({ color: color, roughness: 0.7, metalness: 0.1 });
+
+                const furniture = new THREE.Mesh(geometry, material);
+
+                // Store original color for visual feedback during drag
+                furniture.userData.originalColor = color.getHex();
+                furniture.userData.isDraggable = true; // Mark as draggable
+                furniture.userData.baseHeight = height; // Store base height for accurate positioning
+
+                // Random position within room boundaries, ensuring it's on the floor
+                // Adjust position based on furniture dimensions to prevent clipping walls
+                const minX = -roomWidth / 2 + width / 2;
+                const maxX = roomWidth / 2 - width / 2;
+                const minZ = -roomDepth / 2 + depth / 2;
+                const maxZ = roomDepth / 2 - depth / 2;
+
+                furniture.position.x = Math.random() * (maxX - minX) + minX;
+                furniture.position.y = height / 2; // Place on the floor
+                furniture.position.z = Math.random() * (maxZ - minZ) + minZ;
+
+                // Random rotation around Y-axis
+                furniture.rotation.y = Math.random() * Math.PI * 2;
+
+                furniture.castShadow = true;
+                furniture.receiveShadow = true;
+
+                furnitureGroup.add(furniture);
+            }
+            hideLoading();
+        }
+
+        // --- Mouse Event Handlers ---
+
+        function onMouseDown(event) {
+            event.preventDefault(); // Prevent default browser behavior (e.g., text selection, context menu)
+
+            // Left-click (button 0) for selecting/dragging furniture
+            if (event.button === 0) {
+                // Calculate mouse position in normalized device coordinates (-1 to +1)
+                mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+                raycaster.setFromCamera(mouse, camera);
+
+                // Check for intersections with furniture objects
+                const intersects = raycaster.intersectObjects(furnitureGroup.children);
+                const draggableIntersects = intersects.filter(obj => obj.object.userData.isDraggable);
+
+                if (draggableIntersects.length > 0) {
+                    const hoveredObject = draggableIntersects[0].object;
+
+                    if (SELECTED !== hoveredObject) {
+                        // If a different object is clicked, deselect the previous one
+                        if (SELECTED) {
+                            SELECTED.material.emissive.setHex(SELECTED.userData.originalColor);
+                        }
+                        SELECTED = hoveredObject;
+                        SELECTED.material.emissive.setHex(0x00ffff); // Cyan for selection
+                        isDragging = false; // Not dragging yet, just selected
+                    } else {
+                        // If the same object is clicked again, prepare for drag
+                        isDragging = true;
+                        SELECTED.material.emissive.setHex(0x00ff00); // Green for dragging
+
+                        // Calculate offset from click point to object's center
+                        const floorIntersects = raycaster.intersectObject(floorPlane);
+                        if (floorIntersects.length > 0) {
+                            const intersectionPoint = floorIntersects[0].point;
+                            offset.copy(SELECTED.position).sub(intersectionPoint);
+                            offset.y = 0; // Keep offset only in XZ plane
+                        }
+                    }
+                } else {
+                    // If no draggable object is clicked, deselect current
+                    if (SELECTED) {
+                        SELECTED.material.emissive.setHex(SELECTED.userData.originalColor);
+                        SELECTED = null;
+                    }
+                    isDragging = false; // Ensure dragging is off if nothing is selected
+                }
+            }
+            // Right-click (button 2) for camera rotation
+            else if (event.button === 2) {
+                isRotating = true;
+                previousMouseX = event.clientX;
+                previousMouseY = event.clientY;
+            }
+        }
+
+        function onMouseMove(event) {
+            event.preventDefault();
+
+            // Handle furniture dragging
+            if (isDragging && SELECTED) {
+                // Update mouse position
+                mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+                raycaster.setFromCamera(mouse, camera);
+
+                // Intersect with the floor plane to get the new XZ position
+                const intersects = raycaster.intersectObject(floorPlane);
+
+                if (intersects.length > 0) {
+                    const newPosition = intersects[0].point.add(offset);
+
+                    // Clamp XZ position within room boundaries
+                    // Temporarily update bounding box of SELECTED for accurate collision detection
+                    // This is crucial: the bbox must reflect the current XZ position of the dragged object
+                    // before checking for collisions.
+                    SELECTED.updateMatrixWorld(true); // Ensure world matrix is up-to-date for bbox calculation
+                    const bboxSelected = new THREE.Box3().setFromObject(SELECTED);
+
+                    const sizeSelected = new THREE.Vector3();
+                    bboxSelected.getSize(sizeSelected);
+
+                    const halfWidth = sizeSelected.x / 2;
+                    const halfDepth = sizeSelected.z / 2;
+
+                    SELECTED.position.x = Math.max(-roomWidth / 2 + halfWidth, Math.min(roomWidth / 2 - halfWidth, newPosition.x));
+                    SELECTED.position.z = Math.max(-roomDepth / 2 + halfDepth, Math.min(roomDepth / 2 - halfDepth, newPosition.z));
+
+                    // --- Stacking Logic ---
+                    let targetY = SELECTED.userData.baseHeight / 2; // Default to floor level
+                    let highestObstacleTopY = -Infinity; // Keep track of the highest point an object is on
+
+                    const collisionPadding = 0.01; // Small padding to prevent exact coincidence
+
+                    for (let i = 0; i < furnitureGroup.children.length; i++) {
+                        const otherObject = furnitureGroup.children[i];
+
+                        if (otherObject === SELECTED) continue; // Don't check collision with self
+
+                        otherObject.updateMatrixWorld(true); // Ensure other object's world matrix is up-to-date
+                        const bboxOther = new THREE.Box3().setFromObject(otherObject);
+
+                        // Check for XZ plane overlap only
+                        // Create 2D bounding boxes for XZ plane intersection
+                        const bboxSelected2D = new THREE.Box2(
+                            new THREE.Vector2(bboxSelected.min.x, bboxSelected.min.z),
+                            new THREE.Vector2(bboxSelected.max.x, bboxSelected.max.z)
+                        );
+                        const bboxOther2D = new THREE.Box2(
+                            new THREE.Vector2(bboxOther.min.x, bboxOther.min.z),
+                            new THREE.Vector2(bboxOther.max.x, bboxOther.max.z)
+                        );
+
+                        if (bboxSelected2D.intersectsBox(bboxOther2D)) {
+                            // If XZ bounding boxes intersect, it's a potential stacking candidate
+                            const otherObjectTopY = otherObject.position.y + (otherObject.userData.baseHeight / 2);
+
+                            // Only consider stacking if the 'otherObject' top is higher than previous obstacles.
+                            if (otherObjectTopY > highestObstacleTopY) {
+                                highestObstacleTopY = otherObjectTopY;
+                                // Set targetY to be on top of the other object, plus a small padding
+                                targetY = highestObstacleTopY + (SELECTED.userData.baseHeight / 2) + collisionPadding;
+                            }
+                        }
+                    }
+
+                    SELECTED.position.y = targetY;
+                }
+            }
+            // Handle camera rotation
+            else if (isRotating) {
+                const deltaX = event.clientX - previousMouseX;
+                const deltaY = event.clientY - previousMouseY;
+
+                // Adjust sensitivity
+                const rotationSpeed = 0.005;
+
+                cameraTheta -= deltaX * rotationSpeed;
+                cameraPhi -= deltaY * rotationSpeed;
+
+                // Clamp polar angle to prevent camera from flipping upside down
+                cameraPhi = Math.max(0.1, Math.min(Math.PI - 0.1, cameraPhi));
+
+                // Update camera position based on spherical coordinates
+                camera.position.x = cameraTarget.x + cameraRadius * Math.sin(cameraPhi) * Math.sin(cameraTheta);
+                camera.position.y = cameraTarget.y + cameraRadius * Math.cos(cameraPhi);
+                camera.position.z = cameraTarget.z + cameraRadius * Math.sin(cameraPhi) * Math.cos(cameraTheta);
+
+                camera.lookAt(cameraTarget); // Always look at the center of the room
+
+                previousMouseX = event.clientX;
+                previousMouseY = event.clientY;
+            }
+        }
+
+        function onMouseUp(event) {
+            event.preventDefault();
+
+            if (isDragging) {
+                // If we were dragging, reset state and deselect
+                isDragging = false;
+                if (SELECTED) {
+                    SELECTED.material.emissive.setHex(SELECTED.userData.originalColor); // Revert to original color
+                    SELECTED = null; // Deselect after drag
+                }
+            }
+            if (isRotating) {
+                isRotating = false;
+            }
+        }
+
+        function onMouseWheel(event) {
+            event.preventDefault(); // Prevent page scrolling
+
+            // Adjust camera radius for zooming
+            const zoomSpeed = 0.1;
+            cameraRadius -= event.deltaY * zoomSpeed;
+
+            // Clamp zoom to reasonable limits
+            cameraRadius = Math.max(5, Math.min(50, cameraRadius)); // Min 5, Max 50 units distance
+
+            // Update camera position based on new radius
+            camera.position.x = cameraTarget.x + cameraRadius * Math.sin(cameraPhi) * Math.sin(cameraTheta);
+            camera.position.y = cameraTarget.y + cameraRadius * Math.cos(cameraPhi);
+            camera.position.z = cameraTarget.z + cameraRadius * Math.sin(cameraPhi) * Math.cos(cameraTheta);
+
+            camera.lookAt(cameraTarget);
+        }
+
+
+        // --- End Mouse Event Handlers ---
+
+        // Handle window resize
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+
+        // Start the animation on window load.
+        window.onload = function () {
+            init();
+            animate();
+        };
+    </script>
+</body>
+</html>
