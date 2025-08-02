@@ -5,9 +5,9 @@
   "type": "module",
   "description": "Design your own space with Minkowski's \"Design Your Space\" feature. Just scan your room, decorate it with our products, and buy the bundle.",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "dev": "npx vite",
+    "build": "npx vite build",
+    "preview": "npx vite preview"
   },
   "repository": {
     "type": "git",
@@ -21,9 +21,9 @@
   },
   "homepage": "https://github.com/minkowski-home/design-your-space#readme",
   "devDependencies": {
-    "vite": "^5.2.11"
+    "vite": "^7.0.6"
   },
   "dependencies": {
-  "three": "0.132.2"
-}
+    "three": "0.132.2"
+  }
 }
