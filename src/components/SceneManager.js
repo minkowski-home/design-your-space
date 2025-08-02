@@ -15,7 +15,12 @@ export default class SceneManager {
         this.furnitureGroup = new THREE.Group();
         this.selectedObject = null;
         this.floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-        this.roomSize = 10; // Define room size for boundary checks
+        this.roomSize = 10;
+
+        // Physics Properties
+        this.gravity = new THREE.Vector3(0, -9.8, 0);
+        this.tempVector = new THREE.Vector3();
+        this.clock = new THREE.Clock();
 
         this.scene.add(this.furnitureGroup);
         this.setupScene();
@@ -63,68 +68,102 @@ export default class SceneManager {
         if (intersects.length > 0) {
             this.controls.enabled = false;
             this.selectedObject = intersects[0].object;
+            if (!this.selectedObject.userData.velocity) {
+                this.selectedObject.userData.velocity = new THREE.Vector3();
+            }
         }
     }
 
     onPointerMove(event) {
         if (this.selectedObject) {
-            // 1. Find the potential new position on the floor
             this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
             this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
             this.raycaster.setFromCamera(this.mouse, this.camera);
             const intersectionPoint = new THREE.Vector3();
             this.raycaster.ray.intersectPlane(this.floorPlane, intersectionPoint);
-
-            // 2. Clamp the position to keep the object within the room walls
             const selectedObjectSize = new THREE.Box3().setFromObject(this.selectedObject).getSize(new THREE.Vector3());
             const halfRoomSize = this.roomSize / 2;
-            const halfX = selectedObjectSize.x / 2;
-            const halfZ = selectedObjectSize.z / 2;
-
-            intersectionPoint.x = THREE.MathUtils.clamp(intersectionPoint.x, -halfRoomSize + halfX, halfRoomSize - halfX);
-            intersectionPoint.z = THREE.MathUtils.clamp(intersectionPoint.z, -halfRoomSize + halfZ, halfRoomSize - halfZ);
-
-            // 3. Check for collisions with other objects
-            let highestY = 0; // The top of the highest object we're colliding with
+            intersectionPoint.x = THREE.MathUtils.clamp(intersectionPoint.x, -halfRoomSize + (selectedObjectSize.x / 2), halfRoomSize - (selectedObjectSize.x / 2));
+            intersectionPoint.z = THREE.MathUtils.clamp(intersectionPoint.z, -halfRoomSize + (selectedObjectSize.z / 2), halfRoomSize - (selectedObjectSize.z / 2));
+            
+            let highestY = 0;
             const selectedObjectBBox = new THREE.Box3().setFromObject(this.selectedObject);
             const collisionTargets = this.furnitureGroup.children.filter(child => child !== this.selectedObject);
-
             for (const target of collisionTargets) {
                 const targetBBox = new THREE.Box3().setFromObject(target);
-                
-                // Create a temporary BBox for the selected object at its potential new X/Z position
                 const tempBBox = selectedObjectBBox.clone();
-                tempBBox.translate(new THREE.Vector3(
-                    intersectionPoint.x - this.selectedObject.position.x,
-                    0, // We only care about X/Z intersection for now
-                    intersectionPoint.z - this.selectedObject.position.z
-                ));
-
+                tempBBox.translate(new THREE.Vector3(intersectionPoint.x - this.selectedObject.position.x, 0, intersectionPoint.z - this.selectedObject.position.z));
                 if (tempBBox.intersectsBox(targetBBox)) {
-                    // We have a collision! Find the top of this target object.
-                    const targetTopY = target.position.y + (targetBBox.getSize(new THREE.Vector3()).y / 2);
-                    // If this object is the highest one we've hit so far, update highestY
+                    const targetTopY = target.position.y + (targetBBox.getSize(this.tempVector).y / 2);
                     if (targetTopY > highestY) {
                         highestY = targetTopY;
                     }
                 }
             }
-            
-            // 4. Set the final position
             this.selectedObject.position.x = intersectionPoint.x;
             this.selectedObject.position.z = intersectionPoint.z;
-            // The final Y position is on top of the highest collided object, or on the floor if no collisions.
             this.selectedObject.position.y = highestY + (selectedObjectSize.y / 2);
         }
     }
 
     onPointerUp() {
         this.controls.enabled = true;
-        this.selectedObject = null;
+        if (this.selectedObject) {
+            this.selectedObject.userData.velocity.y = 0;
+            this.selectedObject = null;
+        }
+    }
+
+    applyGravity(deltaTime) {
+        for (const object of this.furnitureGroup.children) {
+            if (object === this.selectedObject) continue;
+            if (!object.userData.velocity) {
+                object.userData.velocity = new THREE.Vector3();
+            }
+
+            const objectBBox = new THREE.Box3().setFromObject(object);
+            const objectSize = objectBBox.getSize(this.tempVector);
+            const halfHeight = objectSize.y / 2;
+            const objectBottom = object.position.y - halfHeight;
+
+            let groundY = 0;
+            const collisionTargets = this.furnitureGroup.children.filter(child => child !== object);
+            
+            for (const target of collisionTargets) {
+                const targetBBox = new THREE.Box3().setFromObject(target);
+                
+                // --- STRICT BOUNDING BOX CHECK ---
+                // Check if the XZ projections of the bounding boxes overlap.
+                const intersectsXZ = 
+                    objectBBox.min.x < targetBBox.max.x &&
+                    objectBBox.max.x > targetBBox.min.x &&
+                    objectBBox.min.z < targetBBox.max.z &&
+                    objectBBox.max.z > targetBBox.min.z;
+
+                if (intersectsXZ) {
+                    const targetTopY = target.position.y + (targetBBox.getSize(this.tempVector).y / 2);
+                    // Check if the target is the highest support directly underneath the object.
+                    if (targetTopY > groundY && targetTopY <= objectBottom + 0.01) {
+                        groundY = targetTopY;
+                    }
+                }
+            }
+            
+            if (objectBottom > groundY) {
+                object.userData.velocity.y += this.gravity.y * deltaTime;
+            } else {
+                object.userData.velocity.y = 0;
+                object.position.y = groundY + halfHeight;
+            }
+
+            object.position.y += object.userData.velocity.y * deltaTime;
+        }
     }
 
     animate() {
         requestAnimationFrame(this.animate.bind(this));
+        const deltaTime = this.clock.getDelta();
+        this.applyGravity(deltaTime);
         this.controls.update();
         this.renderer.render(this.scene, this.camera);
     }
