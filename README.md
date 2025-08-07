@@ -13,7 +13,7 @@ This application provides a dynamic and intuitive way to design and visualize in
 * **Interactive 3D Scene:** A fully rendered 3D room provides the canvas for your design.
 * **Drag-and-Drop Furniture:** Select and move furniture objects around the room with simple mouse controls.
 * **Smart Stacking & Collision:** Objects realistically stack on top of one another. The physics engine prevents objects from overlapping or passing through each other.
-* **Gravity Simulation:** If an object's support is removed, it will realistically fall until it lands on the floor or another piece of furniture.
+* **Parent-Child Movement:** When an object is placed on top of another, moving the bottom object will move all stacked objects together as a unit.
 * **Dynamic Camera Controls:** Orbit, pan, and zoom the camera to view your design from any angle.
 * **Strict Room Boundaries:** Furniture and other objects cannot be moved through walls, ensuring a contained and realistic design space.
 
