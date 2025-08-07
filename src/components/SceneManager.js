@@ -17,14 +17,17 @@ export default class SceneManager {
         this.floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
         this.roomSize = 10;
 
-        // Physics Properties
-        this.gravity = new THREE.Vector3(0, -9.8, 0);
+        // Parent-child relationship tracking
+        this.objectRelationships = new Map(); // Maps object to its parent
+        this.childObjects = new Map(); // Maps object to array of its children
         this.tempVector = new THREE.Vector3();
-        this.clock = new THREE.Clock();
 
         this.scene.add(this.furnitureGroup);
         this.setupScene();
         this.addObjects();
+        
+        // Initialize parent-child relationships after objects are added
+        this.updateObjectRelationships();
 
         window.addEventListener('resize', this.onWindowResize.bind(this), false);
         this.renderer.domElement.addEventListener('pointerdown', this.onPointerDown.bind(this), false);
@@ -51,7 +54,88 @@ export default class SceneManager {
 
     addObjects() {
         new Room(this.scene);
-        new Furniture(this.furnitureGroup);
+        this.furniture = new Furniture(this.furnitureGroup);
+        
+        // Add loading indicator
+        this.addLoadingIndicator();
+        
+        // Add status indicator for GLB models
+        this.addGLBStatusIndicator();
+    }
+
+    addLoadingIndicator() {
+        const loadingDiv = document.createElement('div');
+        loadingDiv.id = 'loading-indicator';
+        loadingDiv.innerHTML = `
+            <div style="
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: rgba(0, 0, 0, 0.8);
+                color: white;
+                padding: 20px;
+                border-radius: 10px;
+                z-index: 1000;
+                font-family: 'Chivo', sans-serif;
+            ">
+                Loading 3D Models...
+            </div>
+        `;
+        document.body.appendChild(loadingDiv);
+        
+        // Remove loading indicator after a delay (models should be loaded by then)
+        setTimeout(() => {
+            const indicator = document.getElementById('loading-indicator');
+            if (indicator) {
+                indicator.remove();
+            }
+        }, 5000); // Increased to 5 seconds to allow for GLB loading
+    }
+
+    addGLBStatusIndicator() {
+        const statusDiv = document.createElement('div');
+        statusDiv.id = 'glb-status';
+        statusDiv.innerHTML = `
+            <div style="
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: rgba(0, 0, 0, 0.8);
+                color: white;
+                padding: 10px;
+                border-radius: 5px;
+                z-index: 1000;
+                font-family: 'Chivo', sans-serif;
+                font-size: 12px;
+            ">
+                GLB Models: Loading...
+            </div>
+        `;
+        document.body.appendChild(statusDiv);
+        
+        // Update status after 6 seconds
+        setTimeout(() => {
+            const status = document.getElementById('glb-status');
+            if (status) {
+                status.innerHTML = `
+                    <div style="
+                        position: fixed;
+                        top: 20px;
+                        right: 20px;
+                        background: rgba(0, 128, 0, 0.8);
+                        color: white;
+                        padding: 10px;
+                        border-radius: 5px;
+                        z-index: 1000;
+                        font-family: 'Chivo', sans-serif;
+                        font-size: 12px;
+                    ">
+                        GLB Models: Loaded ✓
+                    </div>
+                `;
+            }
+        }, 6000);
     }
 
     onWindowResize() {
@@ -64,13 +148,18 @@ export default class SceneManager {
         this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
         this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
         this.raycaster.setFromCamera(this.mouse, this.camera);
-        const intersects = this.raycaster.intersectObjects(this.furnitureGroup.children);
+        
+        // Get all objects that can be selected (including nested meshes in GLB models)
+        const selectableObjects = this.getAllSelectableObjects();
+        const intersects = this.raycaster.intersectObjects(selectableObjects);
+        
         if (intersects.length > 0) {
             this.controls.enabled = false;
-            this.selectedObject = intersects[0].object;
-            if (!this.selectedObject.userData.velocity) {
-                this.selectedObject.userData.velocity = new THREE.Vector3();
-            }
+            // Find the top-level object (either a cube or a GLB model group)
+            this.selectedObject = this.getTopLevelObject(intersects[0].object);
+            console.log('Selected object:', this.selectedObject);
+            // Update relationships before starting to move
+            this.updateObjectRelationships();
         }
     }
 
@@ -81,14 +170,18 @@ export default class SceneManager {
             this.raycaster.setFromCamera(this.mouse, this.camera);
             const intersectionPoint = new THREE.Vector3();
             this.raycaster.ray.intersectPlane(this.floorPlane, intersectionPoint);
+            
             const selectedObjectSize = new THREE.Box3().setFromObject(this.selectedObject).getSize(new THREE.Vector3());
             const halfRoomSize = this.roomSize / 2;
             intersectionPoint.x = THREE.MathUtils.clamp(intersectionPoint.x, -halfRoomSize + (selectedObjectSize.x / 2), halfRoomSize - (selectedObjectSize.x / 2));
             intersectionPoint.z = THREE.MathUtils.clamp(intersectionPoint.z, -halfRoomSize + (selectedObjectSize.z / 2), halfRoomSize - (selectedObjectSize.z / 2));
             
+            // Calculate the highest Y position for stacking (only consider objects not in the same stack)
             let highestY = 0;
             const selectedObjectBBox = new THREE.Box3().setFromObject(this.selectedObject);
-            const collisionTargets = this.furnitureGroup.children.filter(child => child !== this.selectedObject);
+            const objectsInStack = this.getObjectsInStack(this.selectedObject);
+            const collisionTargets = this.furnitureGroup.children.filter(child => !objectsInStack.has(child));
+            
             for (const target of collisionTargets) {
                 const targetBBox = new THREE.Box3().setFromObject(target);
                 const tempBBox = selectedObjectBBox.clone();
@@ -100,70 +193,175 @@ export default class SceneManager {
                     }
                 }
             }
-            this.selectedObject.position.x = intersectionPoint.x;
-            this.selectedObject.position.z = intersectionPoint.z;
-            this.selectedObject.position.y = highestY + (selectedObjectSize.y / 2);
+
+            // Calculate target position for the selected object
+            const targetX = intersectionPoint.x;
+            const targetZ = intersectionPoint.z;
+            const targetY = highestY + (selectedObjectSize.y / 2);
+
+            // Calculate movement delta
+            const deltaX = targetX - this.selectedObject.position.x;
+            const deltaZ = targetZ - this.selectedObject.position.z;
+            const deltaY = targetY - this.selectedObject.position.y;
+
+            // Only move if there's actual movement
+            if (Math.abs(deltaX) > 0.001 || Math.abs(deltaY) > 0.001 || Math.abs(deltaZ) > 0.001) {
+                // Move the entire stack together
+                this.moveEntireStack(this.selectedObject, deltaX, deltaY, deltaZ);
+            }
         }
     }
 
     onPointerUp() {
         this.controls.enabled = true;
         if (this.selectedObject) {
-            this.selectedObject.userData.velocity.y = 0;
+            // Update parent-child relationships after movement
+            this.updateObjectRelationships();
             this.selectedObject = null;
         }
     }
 
-    applyGravity(deltaTime) {
-        for (const object of this.furnitureGroup.children) {
-            if (object === this.selectedObject) continue;
-            if (!object.userData.velocity) {
-                object.userData.velocity = new THREE.Vector3();
+    // Get all objects in the same stack (including the given object)
+    getObjectsInStack(object) {
+        const stackObjects = new Set([object]);
+        
+        // Add all children recursively
+        const addChildren = (obj) => {
+            const children = this.childObjects.get(obj) || [];
+            for (const child of children) {
+                stackObjects.add(child);
+                addChildren(child);
             }
+        };
+        
+        addChildren(object);
+        return stackObjects;
+    }
 
-            const objectBBox = new THREE.Box3().setFromObject(object);
-            const objectSize = objectBBox.getSize(this.tempVector);
-            const halfHeight = objectSize.y / 2;
-            const objectBottom = object.position.y - halfHeight;
-
-            let groundY = 0;
-            const collisionTargets = this.furnitureGroup.children.filter(child => child !== object);
-            
-            for (const target of collisionTargets) {
-                const targetBBox = new THREE.Box3().setFromObject(target);
-                
-                // --- STRICT BOUNDING BOX CHECK ---
-                // Check if the XZ projections of the bounding boxes overlap.
-                const intersectsXZ = 
-                    objectBBox.min.x < targetBBox.max.x &&
-                    objectBBox.max.x > targetBBox.min.x &&
-                    objectBBox.min.z < targetBBox.max.z &&
-                    objectBBox.max.z > targetBBox.min.z;
-
-                if (intersectsXZ) {
-                    const targetTopY = target.position.y + (targetBBox.getSize(this.tempVector).y / 2);
-                    // Check if the target is the highest support directly underneath the object.
-                    if (targetTopY > groundY && targetTopY <= objectBottom + 0.01) {
-                        groundY = targetTopY;
-                    }
-                }
-            }
-            
-            if (objectBottom > groundY) {
-                object.userData.velocity.y += this.gravity.y * deltaTime;
-            } else {
-                object.userData.velocity.y = 0;
-                object.position.y = groundY + halfHeight;
-            }
-
-            object.position.y += object.userData.velocity.y * deltaTime;
+    // Move the entire stack together
+    moveEntireStack(rootObject, deltaX, deltaY, deltaZ) {
+        const stackObjects = this.getObjectsInStack(rootObject);
+        
+        for (const obj of stackObjects) {
+            obj.position.x += deltaX;
+            obj.position.y += deltaY;
+            obj.position.z += deltaZ;
         }
     }
 
+    updateObjectRelationships() {
+        // Clear existing relationships
+        this.objectRelationships.clear();
+        this.childObjects.clear();
+
+        // Initialize child arrays for all objects
+        for (const object of this.furnitureGroup.children) {
+            this.childObjects.set(object, []);
+        }
+
+        // Sort objects by Y position (lowest to highest) to ensure proper relationship detection
+        const sortedObjects = [...this.furnitureGroup.children].sort((a, b) => a.position.y - b.position.y);
+
+        // Determine parent-child relationships based on stacking
+        for (const object of sortedObjects) {
+            const objectBBox = new THREE.Box3().setFromObject(object);
+            const objectSize = objectBBox.getSize(this.tempVector);
+            const objectBottom = object.position.y - (objectSize.y / 2);
+
+            let bestParent = null;
+            let bestParentTopY = -1;
+
+            // Find the best parent (highest object that this object is sitting on)
+            for (const potentialParent of this.furnitureGroup.children) {
+                if (potentialParent === object) continue;
+
+                const parentBBox = new THREE.Box3().setFromObject(potentialParent);
+                const parentSize = parentBBox.getSize(this.tempVector);
+                const parentTopY = potentialParent.position.y + (parentSize.y / 2);
+
+                // Check if object is sitting on this potential parent
+                const intersectsXZ = 
+                    objectBBox.min.x < parentBBox.max.x &&
+                    objectBBox.max.x > parentBBox.min.x &&
+                    objectBBox.min.z < parentBBox.max.z &&
+                    objectBBox.max.z > parentBBox.min.z;
+
+                // More lenient tolerance for relationship detection, with special handling for GLB models
+                const tolerance = potentialParent.type === 'Group' ? 0.3 : 0.2; // More tolerance for GLB models
+                if (intersectsXZ && Math.abs(objectBottom - parentTopY) < tolerance) {
+                    if (parentTopY > bestParentTopY) {
+                        bestParentTopY = parentTopY;
+                        bestParent = potentialParent;
+                    }
+                }
+            }
+
+            // Set the relationship (avoid circular dependencies)
+            if (bestParent && !this.wouldCreateCircularRelationship(object, bestParent)) {
+                this.objectRelationships.set(object, bestParent);
+                this.childObjects.get(bestParent).push(object);
+            }
+        }
+        
+        console.log('Updated object relationships:', this.objectRelationships.size, 'relationships');
+    }
+
+    // Helper function to check if adding a relationship would create a circular dependency
+    wouldCreateCircularRelationship(child, parent) {
+        let current = parent;
+        while (current) {
+            if (current === child) {
+                return true; // Circular relationship detected
+            }
+            current = this.objectRelationships.get(current);
+        }
+        return false;
+    }
+
+    // Get all objects that can be selected (including nested meshes in GLB models)
+    getAllSelectableObjects() {
+        const selectableObjects = [];
+        
+        for (const child of this.furnitureGroup.children) {
+            if (child.type === 'Mesh') {
+                // Simple cube mesh
+                selectableObjects.push(child);
+            } else if (child.type === 'Group') {
+                // GLB model group - add all its meshes
+                this.addMeshesFromGroup(child, selectableObjects);
+            }
+        }
+        
+        return selectableObjects;
+    }
+
+    // Recursively add all meshes from a group (for GLB models)
+    addMeshesFromGroup(group, selectableObjects) {
+        for (const child of group.children) {
+            if (child.type === 'Mesh') {
+                selectableObjects.push(child);
+            } else if (child.type === 'Group') {
+                this.addMeshesFromGroup(child, selectableObjects);
+            }
+        }
+    }
+
+    // Find the top-level object (either a cube or a GLB model group)
+    getTopLevelObject(mesh) {
+        let current = mesh;
+        
+        // Walk up the parent chain until we reach a direct child of furnitureGroup
+        while (current.parent && current.parent !== this.furnitureGroup) {
+            current = current.parent;
+        }
+        
+        return current;
+    }
+
+
+
     animate() {
         requestAnimationFrame(this.animate.bind(this));
-        const deltaTime = this.clock.getDelta();
-        this.applyGravity(deltaTime);
         this.controls.update();
         this.renderer.render(this.scene, this.camera);
     }

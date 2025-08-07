@@ -11,9 +11,10 @@ Welcome to **Design Your Space**, an interactive 3D room planner that allows you
 This application provides a dynamic and intuitive way to design and visualize interior spaces.
 
 * **Interactive 3D Scene:** A fully rendered 3D room provides the canvas for your design.
+* **Mixed Furniture System:** Combines high-quality GLB models with procedurally generated furniture for diverse room layouts.
 * **Drag-and-Drop Furniture:** Select and move furniture objects around the room with simple mouse controls.
 * **Smart Stacking & Collision:** Objects realistically stack on top of one another. The physics engine prevents objects from overlapping or passing through each other.
-* **Gravity Simulation:** If an object's support is removed, it will realistically fall until it lands on the floor or another piece of furniture.
+* **Parent-Child Movement:** When an object is placed on top of another, moving the bottom object will move all stacked objects together as a unit.
 * **Dynamic Camera Controls:** Orbit, pan, and zoom the camera to view your design from any angle.
 * **Strict Room Boundaries:** Furniture and other objects cannot be moved through walls, ensuring a contained and realistic design space.
 
@@ -62,11 +63,47 @@ This project leverages a modern web development stack to deliver a fast and inte
 
 ---
 
+## 🎨 Managing 3D Models
+
+The application supports high-quality GLB models for realistic furniture visualization.
+
+### **Adding New Models**
+
+1. **Place GLB files** in the `/public/models/` directory
+2. **Update configuration** in `src/components/Furniture.js`:
+   ```javascript
+   {
+       path: '/models/your_model.glb',
+       name: 'Your Model Name',
+       scale: 0.5,
+       height: 0.3,
+       probability: 0.7
+   }
+   ```
+
+### **Model Management Script**
+
+Use the included script to manage your models:
+```bash
+# List all available models
+node scripts/manage_models.js list
+
+# Generate configuration for new models
+node scripts/manage_models.js config
+```
+
+### **Model Requirements**
+
+- **Format:** GLB (GL Binary) files
+- **Size:** Optimized for web (recommended < 10MB)
+- **Scale:** Models are automatically scaled to fit the scene
+- **Positioning:** Models are centered and placed on the floor
+
 ## 🔮 Future Development
 
 This project is the first step towards a larger vision. Potential future enhancements include:
 
-* **Real 3D Product Models:** Replacing the placeholder furniture with high-quality `.glb` models of actual Minkowski Home products.
+* **Enhanced Model Library:** Expanding the collection with more Minkowski Home product models
 * **WebAR Integration:** An "View in Your Room" feature allowing users to place 3D models in their own space using their smartphone camera.
 * **Custom Room Scanning:** Investigating SDKs and APIs to allow users to scan and import their own room layouts.
 * **UI for Furniture Selection:** A user interface to browse and add specific products to the scene.
