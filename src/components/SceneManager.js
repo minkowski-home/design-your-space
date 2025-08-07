@@ -54,7 +54,88 @@ export default class SceneManager {
 
     addObjects() {
         new Room(this.scene);
-        new Furniture(this.furnitureGroup);
+        this.furniture = new Furniture(this.furnitureGroup);
+        
+        // Add loading indicator
+        this.addLoadingIndicator();
+        
+        // Add status indicator for GLB models
+        this.addGLBStatusIndicator();
+    }
+
+    addLoadingIndicator() {
+        const loadingDiv = document.createElement('div');
+        loadingDiv.id = 'loading-indicator';
+        loadingDiv.innerHTML = `
+            <div style="
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: rgba(0, 0, 0, 0.8);
+                color: white;
+                padding: 20px;
+                border-radius: 10px;
+                z-index: 1000;
+                font-family: 'Chivo', sans-serif;
+            ">
+                Loading 3D Models...
+            </div>
+        `;
+        document.body.appendChild(loadingDiv);
+        
+        // Remove loading indicator after a delay (models should be loaded by then)
+        setTimeout(() => {
+            const indicator = document.getElementById('loading-indicator');
+            if (indicator) {
+                indicator.remove();
+            }
+        }, 5000); // Increased to 5 seconds to allow for GLB loading
+    }
+
+    addGLBStatusIndicator() {
+        const statusDiv = document.createElement('div');
+        statusDiv.id = 'glb-status';
+        statusDiv.innerHTML = `
+            <div style="
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: rgba(0, 0, 0, 0.8);
+                color: white;
+                padding: 10px;
+                border-radius: 5px;
+                z-index: 1000;
+                font-family: 'Chivo', sans-serif;
+                font-size: 12px;
+            ">
+                GLB Models: Loading...
+            </div>
+        `;
+        document.body.appendChild(statusDiv);
+        
+        // Update status after 6 seconds
+        setTimeout(() => {
+            const status = document.getElementById('glb-status');
+            if (status) {
+                status.innerHTML = `
+                    <div style="
+                        position: fixed;
+                        top: 20px;
+                        right: 20px;
+                        background: rgba(0, 128, 0, 0.8);
+                        color: white;
+                        padding: 10px;
+                        border-radius: 5px;
+                        z-index: 1000;
+                        font-family: 'Chivo', sans-serif;
+                        font-size: 12px;
+                    ">
+                        GLB Models: Loaded ✓
+                    </div>
+                `;
+            }
+        }, 6000);
     }
 
     onWindowResize() {
@@ -67,10 +148,16 @@ export default class SceneManager {
         this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
         this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
         this.raycaster.setFromCamera(this.mouse, this.camera);
-        const intersects = this.raycaster.intersectObjects(this.furnitureGroup.children);
+        
+        // Get all objects that can be selected (including nested meshes in GLB models)
+        const selectableObjects = this.getAllSelectableObjects();
+        const intersects = this.raycaster.intersectObjects(selectableObjects);
+        
         if (intersects.length > 0) {
             this.controls.enabled = false;
-            this.selectedObject = intersects[0].object;
+            // Find the top-level object (either a cube or a GLB model group)
+            this.selectedObject = this.getTopLevelObject(intersects[0].object);
+            console.log('Selected object:', this.selectedObject);
             // Update relationships before starting to move
             this.updateObjectRelationships();
         }
@@ -199,8 +286,9 @@ export default class SceneManager {
                     objectBBox.min.z < parentBBox.max.z &&
                     objectBBox.max.z > parentBBox.min.z;
 
-                // More lenient tolerance for relationship detection
-                if (intersectsXZ && Math.abs(objectBottom - parentTopY) < 0.2) {
+                // More lenient tolerance for relationship detection, with special handling for GLB models
+                const tolerance = potentialParent.type === 'Group' ? 0.3 : 0.2; // More tolerance for GLB models
+                if (intersectsXZ && Math.abs(objectBottom - parentTopY) < tolerance) {
                     if (parentTopY > bestParentTopY) {
                         bestParentTopY = parentTopY;
                         bestParent = potentialParent;
@@ -214,6 +302,8 @@ export default class SceneManager {
                 this.childObjects.get(bestParent).push(object);
             }
         }
+        
+        console.log('Updated object relationships:', this.objectRelationships.size, 'relationships');
     }
 
     // Helper function to check if adding a relationship would create a circular dependency
@@ -227,6 +317,48 @@ export default class SceneManager {
         }
         return false;
     }
+
+    // Get all objects that can be selected (including nested meshes in GLB models)
+    getAllSelectableObjects() {
+        const selectableObjects = [];
+        
+        for (const child of this.furnitureGroup.children) {
+            if (child.type === 'Mesh') {
+                // Simple cube mesh
+                selectableObjects.push(child);
+            } else if (child.type === 'Group') {
+                // GLB model group - add all its meshes
+                this.addMeshesFromGroup(child, selectableObjects);
+            }
+        }
+        
+        return selectableObjects;
+    }
+
+    // Recursively add all meshes from a group (for GLB models)
+    addMeshesFromGroup(group, selectableObjects) {
+        for (const child of group.children) {
+            if (child.type === 'Mesh') {
+                selectableObjects.push(child);
+            } else if (child.type === 'Group') {
+                this.addMeshesFromGroup(child, selectableObjects);
+            }
+        }
+    }
+
+    // Find the top-level object (either a cube or a GLB model group)
+    getTopLevelObject(mesh) {
+        let current = mesh;
+        
+        // Walk up the parent chain until we reach a direct child of furnitureGroup
+        while (current.parent && current.parent !== this.furnitureGroup) {
+            current = current.parent;
+        }
+        
+        return current;
+    }
+
+
 
     animate() {
         requestAnimationFrame(this.animate.bind(this));
