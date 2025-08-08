@@ -185,9 +185,22 @@ export default class SceneManager {
             for (const target of collisionTargets) {
                 const targetBBox = new THREE.Box3().setFromObject(target);
                 const tempBBox = selectedObjectBBox.clone();
-                tempBBox.translate(new THREE.Vector3(intersectionPoint.x - this.selectedObject.position.x, 0, intersectionPoint.z - this.selectedObject.position.z));
-                if (tempBBox.intersectsBox(targetBBox)) {
-                    const targetTopY = target.position.y + (targetBBox.getSize(this.tempVector).y / 2);
+                tempBBox.translate(new THREE.Vector3(
+                    intersectionPoint.x - this.selectedObject.position.x,
+                    0,
+                    intersectionPoint.z - this.selectedObject.position.z
+                ));
+
+                // Check overlap only in the XZ plane to detect stacking regardless of height
+                const intersectsXZ =
+                    tempBBox.min.x < targetBBox.max.x &&
+                    tempBBox.max.x > targetBBox.min.x &&
+                    tempBBox.min.z < targetBBox.max.z &&
+                    tempBBox.max.z > targetBBox.min.z;
+
+                if (intersectsXZ) {
+                    const targetTopY =
+                        target.position.y + targetBBox.getSize(this.tempVector).y / 2;
                     if (targetTopY > highestY) {
                         highestY = targetTopY;
                     }

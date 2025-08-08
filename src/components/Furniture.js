@@ -32,7 +32,6 @@ export class Furniture {
                     path: '/models/White_Pebble_Vase_0802124528_texture.glb',
                     name: 'White Pebble Vase',
                     scale: 0.5,
-                    height: 0.3,
                     probability: 0.7 // Back to 70% chance to spawn
                 }
                 // Add more models here as they become available
@@ -47,7 +46,6 @@ export class Furniture {
                             name: config.name,
                             model: model,
                             scale: config.scale,
-                            height: config.height,
                             probability: config.probability
                         });
                     }
@@ -142,18 +140,22 @@ export class Furniture {
             // Use probability to determine if this model should be spawned
             if (Math.random() < modelData.probability) {
                 const modelInstance = modelData.model.clone();
-                
+
+                // Apply scale before calculating bounds
+                modelInstance.scale.multiplyScalar(modelData.scale);
+
+                // Compute bounding box to determine correct height placement
+                const bbox = new THREE.Box3().setFromObject(modelInstance);
+                const size = bbox.getSize(new THREE.Vector3());
+
                 // Set random position within the room boundaries
                 const halfRoom = (this.roomSize - 1) / 2;
                 modelInstance.position.x = Math.random() * (this.roomSize - 1) - halfRoom;
                 modelInstance.position.z = Math.random() * (this.roomSize - 1) - halfRoom;
-                
-                // Place the model on the floor
-                modelInstance.position.y = modelData.height / 2;
-                
-                // Apply scale
-                modelInstance.scale.multiplyScalar(modelData.scale);
-                
+
+                // Place the model on the floor based on its actual height
+                modelInstance.position.y = size.y / 2;
+
                 // Add to the furniture group
                 this.group.add(modelInstance);
             }
